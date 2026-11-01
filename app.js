@@ -91,7 +91,7 @@ async function cleanupPhotos() {
   try {
     const used = new Set();
     (await dall("kv")).forEach(k => k.photos.forEach(p => used.add(p.id)));
-    const d = await dget("meta", "draft"); if (d) d.photos.forEach(p => used.add(p.id));
+    (await dall("meta")).forEach(d => { if (/^draft/.test(d.key) && d.photos) d.photos.forEach(p => used.add(p.id)); });
     for (const id of await dkeys("ph")) if (!used.has(id)) { await ddel("ph", id); const u = urls.get(id); if (u) { URL.revokeObjectURL(u); urls.delete(id); } }
   } catch (e) { /* not critical */ }
 }
@@ -135,26 +135,50 @@ function current() {
 let draftTimer = 0;
 function saveDraft(now) {
   clearTimeout(draftTimer);
-  const go = () => S.draft ? dput("meta", Object.assign({ key: "draft", date: S.date }, S.draft)) : ddel("meta", "draft");
+  const key = "draft:" + S.date, date = S.date;
+  const go = () => S.draft ? dput("meta", Object.assign({}, S.draft, { key, date })) : ddel("meta", key);
   if (now) return go();
   draftTimer = setTimeout(go, 400);
 }
 
-async function loadToday() {
-  S.date = todayKey();
-  S.kv = (await dget("kv", S.date)) || null;
+const DAY_GEN = ["января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря"];
+const DAY_NAME = ["Воскресенье","Понедельник","Вторник","Среда","Четверг","Пятница","Суббота"];
+const addDays = (k, n) => { const d = parseKey(k); d.setDate(d.getDate() + n); return keyOf(d); };
+function dayLabel(k) {
+  const t = todayKey(), d = parseKey(k), rest = d.getDate() + " " + DAY_GEN[d.getMonth()] + (d.getFullYear() !== new Date().getFullYear() ? " " + d.getFullYear() : "");
+  return (k === t ? "Сегодня" : k === addDays(t, -1) ? "Вчера" : DAY_NAME[d.getDay()]) + ", " + rest;
+}
+let seenToday = todayKey();
+/* one receipt per day; any past day can be opened and printed */
+async function loadDay(date) {
+  date = date && date <= todayKey() ? date : todayKey();
+  seenToday = todayKey();
+  S.date = date;
+  S.kv = (await dget("kv", date)) || null;
   S.nextNo = S.kv ? S.kv.no : await nextNo();
-  let d = await dget("meta", "draft");
-  if (d && d.date !== S.date) {
-    /* an unprinted composition from another day moves to today; an unfinished edit of an old receipt is dropped */
-    if (d.no) { await ddel("meta", "draft"); d = null; } else d.date = S.date;
-  }
+  let d = await dget("meta", "draft:" + date);
+  const legacy = await dget("meta", "draft"); /* drafts from the first version had one shared key */
+  if (legacy) { await ddel("meta", "draft"); if (!legacy.no) { legacy.key = "draft:" + (legacy.date || date); await dput("meta", legacy); if (legacy.date === date || !legacy.date) d = legacy; } }
   if (d && (d.photos.length || d.no)) {
     S.draft = { photos: d.photos, caption: d.caption || "", no: d.no || null, ready: !!d.ready && d.photos.length > 0 };
     S.mode = S.draft.ready ? "ready" : "draft";
   } else { S.draft = null; S.mode = S.kv ? "printed" : "empty"; }
+  renderDayNav();
   renderToday();
 }
+const loadToday = () => loadDay(todayKey());
+function renderDayNav() {
+  const t = todayKey();
+  $("#dayName").textContent = dayLabel(S.date);
+  $("#dayNext").disabled = S.date >= t;
+  $("#dayPick").max = t; $("#dayPick").value = S.date;
+  $("#dayBack").hidden = S.date === t;
+}
+function stepDay(n) { if (S.busy) return; const k = addDays(S.date, n); if (k > todayKey()) return; loadDay(k); }
+$("#dayPrev").onclick = () => stepDay(-1);
+$("#dayNext").onclick = () => stepDay(1);
+$("#dayBack").onclick = () => { if (!S.busy) loadToday(); };
+$("#dayPick").addEventListener("change", e => { const v = e.target.value; if (v && !S.busy) loadDay(v); });
 
 /* ---------- today ---------- */
 function measure() { S.H = wrap.offsetHeight; }
@@ -613,11 +637,10 @@ rollEl.addEventListener("click", async e => {
 });
 function openKv(k) {
   if (!k) return;
-  const isToday = k.date === todayKey();
   prepareExport(k);
-  sheet('<div class="kvbox">' + kvHTML(k, { stamp: true }) + '</div><div class="list"><button class="btn primary" data-s="save">Сохранить картинкой</button>' + (isToday ? '<button class="btn" data-s="edit">Изменить подпись или фото</button>' : "") + '<button class="btn" data-s="close">Закрыть</button></div>', {
+  sheet('<div class="kvbox">' + kvHTML(k, { stamp: true }) + '</div><div class="list"><button class="btn primary" data-s="save">Сохранить картинкой</button>' + ('<button class="btn" data-s="edit">Изменить подпись или фото</button>') + '<button class="btn" data-s="close">Закрыть</button></div>', {
     save: () => saveKv(k),
-    edit: () => { closeSheet(); go("today"); setTimeout(() => { ensureDraft(); S.mode = "draft"; saveDraft(true); renderToday(); }, 0); }
+    edit: async () => { closeSheet(); go("today"); await loadDay(k.date); ensureDraft(); S.mode = "draft"; saveDraft(true); renderToday(); }
   });
   fillImgs($(".sheet"));
 }
@@ -668,11 +691,11 @@ function go(tab, push = true) {
   if (push) { try { history.replaceState(null, "", tab === "roll" ? "#roll" : location.pathname + location.search); } catch (_) {} }
   window.scrollTo(0, 0);
   renderActions();
-  if (tab === "roll") renderRoll(); else if (S.date !== todayKey()) loadToday(); else { measure(); setOff(S.off); }
+  if (tab === "roll") renderRoll(); else if (seenToday !== todayKey() && S.date === seenToday) loadToday(); else { renderDayNav(); measure(); setOff(S.off); }
 }
-$("#tab-today").onclick = () => go("today");
+$("#tab-today").onclick = () => { if (S.tab === "today" && S.date !== todayKey() && !S.busy) loadToday(); else go("today"); };
 $("#tab-roll").onclick = () => go("roll");
-document.addEventListener("visibilitychange", () => { if (!document.hidden && S.date !== todayKey() && !S.busy) loadToday(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden || S.busy || seenToday === todayKey()) return; if (S.date === seenToday) loadToday(); else { seenToday = todayKey(); renderDayNav(); } });
 window.addEventListener("resize", () => { if (S.tab === "today" && !S.busy) renderToday(); });
 
 /* ---------- start ---------- */
@@ -682,6 +705,7 @@ window.addEventListener("resize", () => { if (S.tab === "today" && !S.busy) rend
     await loadToday();
     if (document.fonts) document.fonts.ready.then(() => { if (!S.busy && S.tab === "today") renderToday(); });
     if (location.hash === "#roll") go("roll", false);
+    renderDayNav();
   } catch (e) {
     wrap.innerHTML = '<article class="kv"><p class="kv-cap" style="display:block">Браузер не дал сохранять данные. Откройте приложение в Safari не в режиме «Частный доступ».</p><div class="kv-teeth"></div></article>';
     measure(); setOff(0);

@@ -18,6 +18,12 @@
 <body>
 <main class="app">
   <section id="today" aria-label="Сегодня">
+    <div class="daynav">
+      <button class="icon-btn" id="dayPrev" aria-label="Предыдущий день"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <label class="dayname"><span id="dayName">Сегодня</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><input type="date" id="dayPick" aria-label="Выбрать день"></label>
+      <button class="icon-btn" id="dayNext" aria-label="Следующий день"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>
+    </div>
+    <button class="dayback" id="dayBack" hidden>Вернуться к сегодня</button>
     <div class="stage">
       <div class="printer idle" id="printer" aria-hidden="true">
         <span class="led"></span><span class="knob"></span><span class="slot"></span>
